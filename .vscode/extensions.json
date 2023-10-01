@@ -1,11 +1,10 @@
 {
     "recommendations": [
-        "Tyriar.sort-lines",
+        "tyriar.sort-lines",
         "charliermarsh.ruff",
         "esbenp.prettier-vscode",
         "hbenl.vscode-test-explorer",
         "ms-python.isort",
-        "ms-python.python",
         "ms-python.vscode-pylance",
         "ms-vscode.live-server",
         "redhat.ansible",
@@ -14,6 +13,6 @@
         "shardulm94.trailing-spaces",
         "tamasfe.even-better-toml",
         "timonwong.shellcheck",
-        "znck.grammarly",
+        "znck.grammarly"
     ]
 }
