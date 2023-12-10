@@ -31,7 +31,7 @@ class CheckRequiresAnsibleVersion(AnsibleLintRule):
 
     # Refer to https://access.redhat.com/support/policy/updates/ansible-automation-platform
     # Also add devel to this list
-    supported_ansible = ["2.13.", "2.14.", "2.15."]
+    supported_ansible = ["2.14.", "2.15.", "2.16."]
     _ids = {
         "meta-runtime[unsupported-version]": "'requires_ansible' key must be set to a supported version - 2.13.x, 2.14.x, 2.15.x",
         "meta-runtime[invalid-version]": "'requires_ansible' is not a valid requirement specification",
@@ -80,8 +80,9 @@ class CheckRequiresAnsibleVersion(AnsibleLintRule):
 if "pytest" in sys.modules:
     import pytest
 
-    from ansiblelint.rules import RulesCollection  # pylint: disable=ungrouped-imports
-    from ansiblelint.runner import Runner  # pylint: disable=ungrouped-imports
+    # pylint: disable=ungrouped-imports
+    from ansiblelint.rules import RulesCollection
+    from ansiblelint.runner import Runner
 
     @pytest.mark.parametrize(
         ("test_file", "failures", "tags"),

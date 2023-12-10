@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import re
 import sys
-from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 from ansiblelint.constants import LINE_NUMBER_KEY
@@ -12,6 +11,7 @@ from ansiblelint.rules import AnsibleLintRule, TransformMixin
 if TYPE_CHECKING:
     from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
+    from ansiblelint.config import Options
     from ansiblelint.errors import MatchError
     from ansiblelint.file_utils import Lintable
     from ansiblelint.utils import Task
@@ -174,14 +174,20 @@ class NameRule(AnsibleLintRule, TransformMixin):
         if match.tag == "name[casing]":
             target_task = self.seek(match.yaml_path, data)
             # Not using capitalize(), since that rewrites the rest of the name to lower case
-            target_task[
-                "name"
-            ] = f"{target_task['name'][:1].upper()}{target_task['name'][1:]}"
+            task_name = target_task["name"]
+            if "|" in task_name:  # if using prefix
+                [file_name, update_task_name] = task_name.split("|")
+                target_task[
+                    "name"
+                ] = f"{file_name.strip()} | {update_task_name.strip()[:1].upper()}{update_task_name.strip()[1:]}"
+            else:
+                target_task[
+                    "name"
+                ] = f"{target_task['name'][:1].upper()}{target_task['name'][1:]}"
             match.fixed = True
 
 
 if "pytest" in sys.modules:
-    from ansiblelint.config import options
     from ansiblelint.file_utils import Lintable
     from ansiblelint.rules import RulesCollection
     from ansiblelint.runner import Runner
@@ -203,11 +209,10 @@ if "pytest" in sys.modules:
         errs = bad_runner.run()
         assert len(errs) == 5
 
-    def test_name_prefix_negative() -> None:
+    def test_name_prefix_negative(config_options: Options) -> None:
         """Negative test for name[missing]."""
-        custom_options = deepcopy(options)
-        custom_options.enable_list = ["name[prefix]"]
-        collection = RulesCollection(options=custom_options)
+        config_options.enable_list = ["name[prefix]"]
+        collection = RulesCollection(options=config_options)
         collection.register(NameRule())
         failure = Lintable(
             "examples/playbooks/tasks/rule-name-prefix-fail.yml",
@@ -255,6 +260,5 @@ if "pytest" in sys.modules:
     def test_when_no_lintable() -> None:
         """Test when lintable is None."""
         name_rule = NameRule()
-        # pylint: disable=protected-access
         result = name_rule._prefix_check("Foo", None, 1)  # noqa: SLF001
         assert len(result) == 0

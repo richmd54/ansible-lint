@@ -12,12 +12,18 @@ from ansiblelint.formatters import BaseFormatter
 @pytest.mark.parametrize(
     ("base_dir", "relative_path"),
     (
-        (None, True),
-        ("/whatever", False),
-        (Path("/whatever"), False),
+        pytest.param(None, True, id="0"),
+        pytest.param("/whatever", False, id="1"),
+        pytest.param(Path("/whatever"), False, id="2"),
     ),
 )
-@pytest.mark.parametrize("path", ("/whatever/string", Path("/whatever/string")))
+@pytest.mark.parametrize(
+    "path",
+    (
+        pytest.param("/whatever/string", id="a"),
+        pytest.param(Path("/whatever/string"), id="b"),
+    ),
+)
 def test_base_formatter_when_base_dir(
     base_dir: Any,
     relative_path: bool,
@@ -28,10 +34,8 @@ def test_base_formatter_when_base_dir(
     base_formatter = BaseFormatter(base_dir, relative_path)  # type: ignore[var-annotated]
 
     # When
-    output_path = (
-        base_formatter._format_path(  # pylint: disable=protected-access # noqa: SLF001
-            path,
-        )
+    output_path = base_formatter._format_path(  # noqa: SLF001
+        path,
     )
 
     # Then
@@ -46,11 +50,17 @@ def test_base_formatter_when_base_dir(
 @pytest.mark.parametrize(
     "base_dir",
     (
-        Path("/whatever"),
-        "/whatever",
+        pytest.param(Path("/whatever"), id="0"),
+        pytest.param("/whatever", id="1"),
     ),
 )
-@pytest.mark.parametrize("path", ("/whatever/string", Path("/whatever/string")))
+@pytest.mark.parametrize(
+    "path",
+    (
+        pytest.param("/whatever/string", id="a"),
+        pytest.param(Path("/whatever/string"), id="b"),
+    ),
+)
 def test_base_formatter_when_base_dir_is_given_and_relative_is_true(
     path: str | Path,
     base_dir: str | Path,
@@ -60,12 +70,10 @@ def test_base_formatter_when_base_dir_is_given_and_relative_is_true(
     base_formatter = BaseFormatter(base_dir, True)  # type: ignore[var-annotated]
 
     # When
-    # pylint: disable=protected-access
     output_path = base_formatter._format_path(path)  # noqa: SLF001
 
     # Then
     assert isinstance(output_path, (str, Path))
-    # pylint: disable=protected-access
     assert isinstance(base_formatter.base_dir, (str, Path))
     assert output_path == Path(path).name
 

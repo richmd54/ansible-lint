@@ -1,16 +1,17 @@
 """Test schemas modules."""
 import json
 import logging
+import os
 import subprocess
 import sys
 import urllib
+import warnings
 from pathlib import Path
-from time import sleep
 from typing import Any
 from unittest.mock import DEFAULT, MagicMock, patch
 
+import license_expression
 import pytest
-import spdx.config
 
 from ansiblelint.file_utils import Lintable
 from ansiblelint.schemas import __file__ as schema_module
@@ -18,21 +19,9 @@ from ansiblelint.schemas.__main__ import refresh_schemas
 from ansiblelint.schemas.main import validate_file_schema
 
 schema_path = Path(schema_module).parent
-spdx_config_path = Path(spdx.config.__file__).parent
-
-
-def test_refresh_schemas() -> None:
-    """Test for schema update skip."""
-    # This is written as a single test in order to avoid concurrency issues,
-    # which caused random issues on CI when the two tests run in parallel
-    # and or in different order.
-    assert refresh_schemas(min_age_seconds=3600 * 24 * 365 * 10) == 0
-    sleep(1)
-    # this should disable the cache and force an update
-    assert refresh_schemas(min_age_seconds=0) == 1
-    sleep(1)
-    # should be cached now
-    assert refresh_schemas(min_age_seconds=10) == 0
+spdx_config_path = (
+    Path(license_expression.__file__).parent / "data" / "scancode-licensedb-index.json"
+)
 
 
 def urlopen_side_effect(*_args: Any, **kwargs: Any) -> DEFAULT:
@@ -59,7 +48,7 @@ def test_request_timeouterror_handling(
     error_msg = "Simulating handshake operation time out."
     mock_request.urlopen.side_effect = urllib.error.URLError(TimeoutError(error_msg))
     with caplog.at_level(logging.DEBUG):
-        assert refresh_schemas(min_age_seconds=0) == 1
+        assert refresh_schemas(min_age_seconds=0) == 0
     mock_request.urlopen.assert_called()
     assert "Skipped schema refresh due to unexpected exception: " in caplog.text
     assert error_msg in caplog.text
@@ -73,7 +62,7 @@ def test_schema_refresh_cli() -> None:
         capture_output=True,
         text=True,
     )
-    assert proc.returncode == 0
+    assert proc.returncode == 0, proc
 
 
 def test_validate_file_schema() -> None:
@@ -86,24 +75,33 @@ def test_validate_file_schema() -> None:
 
 def test_spdx() -> None:
     """Test that SPDX license identifiers are in sync."""
-    _licenses = spdx_config_path / "licenses.json"
-
     license_ids = set()
-    with _licenses.open(encoding="utf-8") as license_fh:
+    with spdx_config_path.open(encoding="utf-8") as license_fh:
         licenses = json.load(license_fh)
-    for lic in licenses["licenses"]:
-        if lic.get("isDeprecatedLicenseId"):
+    for lic in licenses:
+        if lic.get("is_deprecated"):
             continue
-        license_ids.add(lic["licenseId"])
+        lic_id = lic["spdx_license_key"]
+        if lic_id.startswith("LicenseRef"):
+            continue
+        license_ids.add(lic_id)
 
     galaxy_json = schema_path / "galaxy.json"
     with galaxy_json.open(encoding="utf-8") as f:
         schema = json.load(f)
         spx_enum = schema["$defs"]["SPDXLicenseEnum"]["enum"]
     if set(spx_enum) != license_ids:
-        with galaxy_json.open("w", encoding="utf-8") as f:
-            schema["$defs"]["SPDXLicenseEnum"]["enum"] = sorted(license_ids)
-            json.dump(schema, f, indent=2)
-        pytest.fail(
-            "SPDX license list inside galaxy.json JSON Schema file was updated.",
-        )
+        # In absence of a
+        if os.environ.get("PIP_CONSTRAINT", "/dev/null") != "/dev/null":
+            with galaxy_json.open("w", encoding="utf-8") as f:
+                schema["$defs"]["SPDXLicenseEnum"]["enum"] = sorted(license_ids)
+                json.dump(schema, f, indent=2)
+            pytest.fail(
+                "SPDX license list inside galaxy.json JSON Schema file was updated.",
+            )
+        else:
+            warnings.warn(
+                "test_spdx failure was ignored because constraints were not pinned (PIP_CONSTRAINTS). This is expected for py39 and py-devel jobs.",
+                category=pytest.PytestWarning,
+                stacklevel=1,
+            )

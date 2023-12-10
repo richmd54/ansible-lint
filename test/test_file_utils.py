@@ -258,6 +258,11 @@ def test_discover_lintables_umlaut(monkeypatch: MonkeyPatch) -> None:
             "playbook",
             id="43",
         ),  # content should determine it as a play
+        pytest.param(
+            "plugins/modules/fake_module.py",
+            "plugin",
+            id="44",
+        ),
     ),
 )
 def test_kinds(path: str, kind: FileType) -> None:

@@ -98,13 +98,28 @@ BASE_KINDS = [
     {"text/python": "**/*.py"},
 ]
 
+# File kinds that are recognized by ansible, used internally to force use of
+# YAML 1.1 instead of 1.2 due to ansible-core dependency on pyyaml.
+ANSIBLE_OWNED_KINDS = {
+    "handlers",
+    "galaxy",
+    "meta",
+    "meta-runtime",
+    "playbook",
+    "requirements",
+    "role-arg-spec",
+    "rulebook",
+    "tasks",
+    "vars",
+}
+
 PROFILES = yaml_from_file(Path(__file__).parent / "data" / "profiles.yml")
 
 LOOP_VAR_PREFIX = "^(__|{role}_)"
 
 
 @dataclass
-class Options:  # pylint: disable=too-many-instance-attributes,too-few-public-methods
+class Options:  # pylint: disable=too-many-instance-attributes
     """Store ansible-lint effective configuration options."""
 
     # Private attributes
@@ -158,6 +173,12 @@ class Options:  # pylint: disable=too-many-instance-attributes,too-few-public-me
     ignore_file: Path | None = None
     max_tasks: int = 100
     max_block_depth: int = 20
+    nodeps: bool = bool(int(os.environ.get("ANSIBLE_LINT_NODEPS", "0")))
+
+    def __post_init__(self) -> None:
+        """Extra initialization logic."""
+        if self.nodeps:
+            self.offline = True
 
 
 options = Options()
@@ -170,15 +191,6 @@ collection_list: list[str] = []
 
 # Used to store log messages before logging is initialized (level, message)
 log_entries: list[tuple[int, str]] = []
-
-
-def get_rule_config(rule_id: str) -> dict[str, Any]:
-    """Get configurations for the rule ``rule_id``."""
-    rule_config = options.rules.get(rule_id, {})
-    if not isinstance(rule_config, dict):  # pragma: no branch
-        msg = f"Invalid rule config for {rule_id}: {rule_config}"
-        raise RuntimeError(msg)
-    return rule_config
 
 
 @lru_cache
@@ -247,7 +259,6 @@ def guess_install_method() -> str:
             else:
                 logging.debug("Skipping %s as it is not installed.", package_name)
                 use_pip = False
-    # pylint: disable=broad-except
     except (AttributeError, ModuleNotFoundError) as exc:
         # On Fedora 36, we got a AttributeError exception from pip that we want to avoid
         # On NixOS, we got a ModuleNotFoundError exception from pip that we want to avoid

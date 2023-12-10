@@ -189,6 +189,7 @@ levelname
 libbzip
 libera
 libyaml
+licensedb
 lineinfile
 linenums
 linkcheck
@@ -207,6 +208,7 @@ matchtasks
 matchvar
 matchyaml
 maxdepth
+maxsplit
 minversion
 mkdir
 mkdocs
@@ -259,6 +261,7 @@ pipx
 pkgcache  # linux
 pkgs
 placefolder
+plainexamples
 pluggy
 pluginmanager
 pmrun
@@ -290,6 +293,7 @@ pyupgrade
 pyyaml
 redirections
 reexec
+reformatter
 regexes
 releasenotes
 relpath
@@ -312,6 +316,7 @@ ruleset
 runas
 sarif
 scalarint
+scancode
 schemafile
 sdist
 sdists
@@ -385,6 +390,7 @@ unindented
 uninstallation
 unjinja
 unlex
+unloadable
 unnormalized
 unskippable
 unspaced

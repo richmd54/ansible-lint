@@ -10,6 +10,7 @@ import pytest
 from pytest_mock import MockerFixture
 
 from ansiblelint.config import get_version_warning
+from ansiblelint.constants import RC
 
 
 @pytest.mark.parametrize(
@@ -52,9 +53,9 @@ def test_call_from_outside_venv(expected_warning: bool) -> None:
 @pytest.mark.parametrize(
     ("ver_diff", "found", "check", "outlen"),
     (
-        ("v1.2.2", True, "pre-release", 1),
-        ("v1.2.3", False, "", 1),
-        ("v1.2.4", True, "new release", 2),
+        pytest.param("v1.2.2", True, "pre-release", 1, id="0"),
+        pytest.param("v1.2.3", False, "", 1, id="1"),
+        pytest.param("v1.2.4", True, "new release", 2, id="2"),
     ),
 )
 def test_get_version_warning(
@@ -82,3 +83,42 @@ def test_get_version_warning(
     else:
         assert check in msg
     assert len(msg.split("\n")) == outlen
+
+
+@pytest.mark.parametrize(
+    ("lintable"),
+    (
+        pytest.param("examples/playbooks/nodeps.yml", id="1"),
+        pytest.param("examples/playbooks/nodeps2.yml", id="2"),
+    ),
+)
+def test_nodeps(lintable: str) -> None:
+    """Asserts ability to be called w/ or w/o venv activation."""
+    env = os.environ.copy()
+    env["ANSIBLE_LINT_NODEPS"] = "1"
+    py_path = Path(sys.executable).parent
+    proc = subprocess.run(
+        [str(py_path / "ansible-lint"), lintable],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert proc.returncode == 0, proc
+
+
+def test_broken_ansible_cfg() -> None:
+    """Asserts behavior when encountering broken ansible.cfg files."""
+    py_path = Path(sys.executable).parent
+    proc = subprocess.run(
+        [str(py_path / "ansible-lint"), "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd="test/fixtures/broken-ansible.cfg",
+    )
+    assert proc.returncode == RC.INVALID_CONFIG, proc
+    assert (
+        "Invalid type for configuration option setting: DEFAULT_GATHER_TIMEOUT"
+        in proc.stderr
+    )

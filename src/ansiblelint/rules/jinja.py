@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -10,7 +11,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 import black
 import jinja2
-from ansible.errors import AnsibleError, AnsibleParserError
+from ansible.errors import AnsibleError, AnsibleFilterError, AnsibleParserError
 from ansible.parsing.yaml.objects import AnsibleUnicode
 from jinja2.exceptions import TemplateSyntaxError
 
@@ -131,6 +132,8 @@ class JinjaRule(AnsibleLintRule, TransformMixin):
                             variables=deannotate(task.get("vars", {})),
                             fail_on_error=True,  # we later decide which ones to ignore or not
                         )
+                    except AnsibleFilterError:
+                        bypass = True
                     # ValueError RepresenterError
                     except AnsibleError as exc:
                         bypass = False
@@ -219,7 +222,6 @@ class JinjaRule(AnsibleLintRule, TransformMixin):
 
         if str(file.kind) == "vars":
             data = parse_yaml_from_file(str(file.path))
-            # pylint: disable=unused-variable
             for key, v, _path in nested_items_path(data):
                 if isinstance(v, AnsibleUnicode):
                     reformatted, details, tag = self.check_whitespace(
@@ -287,7 +289,7 @@ class JinjaRule(AnsibleLintRule, TransformMixin):
             last_value = value
         return result
 
-    # pylint: disable=too-many-statements,too-many-locals
+    # pylint: disable=too-many-locals
     def check_whitespace(
         self,
         text: str,
@@ -386,8 +388,6 @@ class JinjaRule(AnsibleLintRule, TransformMixin):
 
         except jinja2.exceptions.TemplateSyntaxError as exc:
             return "", str(exc.message), "invalid"
-        # https://github.com/PyCQA/pylint/issues/7433 - py311 only
-        # pylint: disable=c-extension-no-member
         except (NotImplementedError, black.parsing.InvalidInput) as exc:
             # black is not able to recognize all valid jinja2 templates, so we
             # just ignore InvalidInput errors.
@@ -480,13 +480,14 @@ def blacken(text: str) -> str:
 
 
 if "pytest" in sys.modules:
+    from unittest import mock
+
     import pytest
 
-    from ansiblelint.rules import RulesCollection  # pylint: disable=ungrouped-imports
-    from ansiblelint.runner import Runner
-
     # pylint: disable=ungrouped-imports
-    from ansiblelint.transformer import Transformer  # pylint: disable=ungrouped-imports
+    from ansiblelint.rules import RulesCollection
+    from ansiblelint.runner import Runner
+    from ansiblelint.transformer import Transformer
 
     @pytest.fixture(name="error_expected_lines")
     def fixture_error_expected_lines() -> list[int]:
@@ -828,16 +829,16 @@ if "pytest" in sys.modules:
         errs = Runner(success, rules=collection).run()
         assert len(errs) == 0
 
+    @mock.patch.dict(os.environ, {"ANSIBLE_LINT_WRITE_TMP": "1"}, clear=True)
     def test_jinja_transform(
         config_options: Options,
-        copy_examples_dir: tuple[Path, Path],
         default_rules_collection: RulesCollection,
     ) -> None:
         """Test transform functionality for jinja rule."""
-        playbook: str = "examples/playbooks/rule-jinja-before.yml"
+        playbook = Path("examples/playbooks/rule-jinja-before.yml")
         config_options.write_list = ["all"]
 
-        config_options.lintables = [playbook]
+        config_options.lintables = [str(playbook)]
         runner_result = get_matches(
             rules=default_rules_collection,
             options=config_options,
@@ -848,17 +849,17 @@ if "pytest" in sys.modules:
         matches = runner_result.matches
         assert len(matches) == 2
 
-        orig_dir, tmp_dir = copy_examples_dir
-        orig_playbook = orig_dir / playbook
-        expected_playbook = orig_dir / playbook.replace(".yml", ".transformed.yml")
-        transformed_playbook = tmp_dir / playbook
+        orig_content = playbook.read_text(encoding="utf-8")
+        expected_content = playbook.with_suffix(
+            f".transformed{playbook.suffix}",
+        ).read_text(encoding="utf-8")
+        transformed_content = playbook.with_suffix(f".tmp{playbook.suffix}").read_text(
+            encoding="utf-8",
+        )
 
-        orig_playbook_content = orig_playbook.read_text()
-        expected_playbook_content = expected_playbook.read_text()
-        transformed_playbook_content = transformed_playbook.read_text()
-
-        assert orig_playbook_content != transformed_playbook_content
-        assert transformed_playbook_content == expected_playbook_content
+        assert orig_content != transformed_content
+        assert expected_content == transformed_content
+        playbook.with_suffix(f".tmp{playbook.suffix}").unlink()
 
 
 def _get_error_line(task: dict[str, Any], path: list[str | int]) -> int:

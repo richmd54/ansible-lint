@@ -23,9 +23,9 @@ def test_example(default_rules_collection: RulesCollection) -> None:
             "examples/playbooks/syntax-error-string.yml",
             6,
             7,
-            id="syntax-error",
+            id="0",
         ),
-        pytest.param("examples/playbooks/syntax-error.yml", 2, 3, id="syntax-error"),
+        pytest.param("examples/playbooks/syntax-error.yml", 2, 3, id="1"),
     ),
 )
 def test_example_syntax_error(
@@ -67,7 +67,7 @@ def test_vault_partial(
     default_rules_collection: RulesCollection,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Check ability to precess files that container !vault inside."""
+    """Check ability to process files that container !vault inside."""
     result = Runner(
         "examples/playbooks/vars/vault_partial.yml",
         rules=default_rules_collection,

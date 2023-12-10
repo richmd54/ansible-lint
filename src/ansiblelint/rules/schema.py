@@ -14,6 +14,7 @@ from ansiblelint.schemas.main import validate_file_schema
 from ansiblelint.text import has_jinja
 
 if TYPE_CHECKING:
+    from ansiblelint.config import Options
     from ansiblelint.utils import Task
 
 
@@ -118,7 +119,7 @@ class ValidateSchemaRule(AnsibleLintRule):
                             message=msg,
                             lineno=data.get("__line__", 1),
                             lintable=file,
-                            rule=ValidateSchemaRule(),
+                            rule=self,
                             details=ValidateSchemaRule.description,
                             tag=f"schema[{file.kind}]",
                         ),
@@ -142,7 +143,7 @@ class ValidateSchemaRule(AnsibleLintRule):
                     MatchError(
                         message=msg,
                         lintable=file,
-                        rule=ValidateSchemaRule(),
+                        rule=self,
                         details=ValidateSchemaRule.description,
                         tag=f"schema[{tag}]",
                     ),
@@ -167,7 +168,7 @@ class ValidateSchemaRule(AnsibleLintRule):
                 MatchError(
                     message=error,
                     lintable=file,
-                    rule=ValidateSchemaRule(),
+                    rule=self,
                     details=ValidateSchemaRule.description,
                     tag=f"schema[{file.kind}]",
                 ),
@@ -184,7 +185,6 @@ if "pytest" in sys.modules:
     import pytest
 
     # pylint: disable=ungrouped-imports
-    from ansiblelint.config import options
     from ansiblelint.rules import RulesCollection
     from ansiblelint.runner import Runner
 
@@ -232,7 +232,12 @@ if "pytest" in sys.modules:
                 ],
                 id="execution-environment-broken",
             ),
-            ("examples/meta/runtime.yml", "meta-runtime", []),
+            pytest.param(
+                "examples/meta/runtime.yml",
+                "meta-runtime",
+                [],
+                id="meta-runtime",
+            ),
             pytest.param(
                 "examples/broken_collection_meta_runtime/meta/runtime.yml",
                 "meta-runtime",
@@ -343,12 +348,17 @@ if "pytest" in sys.modules:
             ),
         ),
     )
-    def test_schema(file: str, expected_kind: str, expected: list[str]) -> None:
+    def test_schema(
+        file: str,
+        expected_kind: str,
+        expected: list[str],
+        config_options: Options,
+    ) -> None:
         """Validate parsing of ansible output."""
         lintable = Lintable(file)
         assert lintable.kind == expected_kind
 
-        rules = RulesCollection(options=options)
+        rules = RulesCollection(options=config_options)
         rules.register(ValidateSchemaRule())
         results = Runner(lintable, rules=rules).run()
 
@@ -375,12 +385,13 @@ if "pytest" in sys.modules:
         expected_kind: str,
         expected_tag: str,
         count: int,
+        config_options: Options,
     ) -> None:
         """Validate ability to detect schema[moves]."""
         lintable = Lintable(file)
         assert lintable.kind == expected_kind
 
-        rules = RulesCollection(options=options)
+        rules = RulesCollection(options=config_options)
         rules.register(ValidateSchemaRule())
         results = Runner(lintable, rules=rules).run()
 

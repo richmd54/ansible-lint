@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from ansiblelint.constants import RULE_DOC_URL
 
 if TYPE_CHECKING:
+    from ansiblelint.config import Options
     from ansiblelint.errors import MatchError
     from ansiblelint.file_utils import Lintable
     from ansiblelint.rules import RulesCollection
@@ -44,6 +45,8 @@ class BaseRule:
     link: str = ""
     has_dynamic_tags: bool = False
     needs_raw_task: bool = False
+    # Used to mark rules that we will never unload (internal ones)
+    unloadable: bool = False
     # We use _order to sort rules and to ensure that some run before others,
     # _order 0 for internal rules
     # _order 1 for rules that check that data can be loaded
@@ -96,6 +99,7 @@ class BaseRule:
                         str(file),
                         exc,
                     )
+                    _logger.debug("Ignored exception details", exc_info=True)
         else:
             matches.extend(self.matchdir(file))
         return matches
@@ -157,6 +161,24 @@ class BaseRule:
         """
         return getattr(cls, "_ids", {cls.id: cls.shortdesc})
 
+    @property
+    def rule_config(self) -> dict[str, Any]:
+        """Retrieve rule specific configuration."""
+        rule_config = self.options.rules.get(self.id, {})
+        if not isinstance(rule_config, dict):  # pragma: no branch
+            msg = f"Invalid rule config for {self.id}: {rule_config}"
+            raise RuntimeError(msg)
+        return rule_config
+
+    @property
+    def options(self) -> Options:
+        """Used to access linter configuration."""
+        if self._collection is None:
+            msg = f"A rule ({self.id}) that is not part of a collection cannot access its configuration."
+            _logger.warning(msg)
+            raise RuntimeError(msg)
+        return self._collection.options
+
 
 # pylint: enable=unused-argument
 
@@ -170,6 +192,7 @@ class RuntimeErrorRule(BaseRule):
     tags = ["core"]
     version_added = "v5.0.0"
     _order = 0
+    unloadable = True
 
 
 class AnsibleParserErrorRule(BaseRule):
@@ -181,6 +204,7 @@ class AnsibleParserErrorRule(BaseRule):
     tags = ["core"]
     version_added = "v5.0.0"
     _order = 0
+    unloadable = True
 
 
 class LoadingFailureRule(BaseRule):
@@ -196,6 +220,7 @@ class LoadingFailureRule(BaseRule):
     _ids = {
         "load-failure[not-found]": "File not found",
     }
+    unloadable = True
 
 
 class WarningRule(BaseRule):
@@ -207,3 +232,4 @@ class WarningRule(BaseRule):
     tags = ["core", "experimental"]
     version_added = "v6.8.0"
     _order = 0
+    unloadable = True

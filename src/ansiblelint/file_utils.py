@@ -16,7 +16,7 @@ import wcmatch.pathlib
 import wcmatch.wcmatch
 from yaml.error import YAMLError
 
-from ansiblelint.config import BASE_KINDS, Options, options
+from ansiblelint.config import ANSIBLE_OWNED_KINDS, BASE_KINDS, Options, options
 from ansiblelint.constants import CONFIG_FILENAMES, FileType, States
 
 if TYPE_CHECKING:
@@ -197,6 +197,9 @@ class Lintable:
         self.exc: Exception | None = None  # Stores data loading exceptions
         self.parent = parent
         self.explicit = False  # Indicates if the file was explicitly provided or was indirectly included.
+        self.line_offset = (
+            0  # Amount to offset line numbers by to get accurate position
+        )
 
         if isinstance(name, str):
             name = Path(name)
@@ -252,7 +255,12 @@ class Lintable:
             self.parent = _guess_parent(self)
 
         if self.kind == "yaml":
-            _ = self.data  # pylint: disable=pointless-statement
+            _ = self.data
+
+    def __del__(self) -> None:
+        """Clean up temporary files when the instance is cleaned up."""
+        if hasattr(self, "file"):
+            self.file.close()
 
     def _guess_kind(self) -> None:
         if self.kind == "yaml":
@@ -350,10 +358,16 @@ class Lintable:
 
             lintable.write(force=True)
         """
-        if not force and not self.updated:
+        dump_filename = self.path.expanduser().resolve()
+        if os.environ.get("ANSIBLE_LINT_WRITE_TMP", "0") == "1":
+            dump_filename = dump_filename.with_suffix(
+                f".tmp{dump_filename.suffix}",
+            )
+        elif not force and not self.updated:
             # No changes to write.
             return
-        self.path.expanduser().resolve().write_text(
+
+        dump_filename.write_text(
             self._content or "",
             encoding="utf-8",
         )
@@ -371,6 +385,10 @@ class Lintable:
     def __repr__(self) -> str:
         """Return user friendly representation of a lintable."""
         return f"{self.name} ({self.kind})"
+
+    def is_owned_by_ansible(self) -> bool:
+        """Return true for YAML files that are managed by Ansible."""
+        return self.kind in ANSIBLE_OWNED_KINDS
 
     @property
     def data(self) -> Any:

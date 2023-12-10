@@ -11,7 +11,7 @@ import pytest
 from ansiblelint.errors import MatchError
 from ansiblelint.file_utils import Lintable
 from ansiblelint.formatters import CodeclimateJSONFormatter
-from ansiblelint.rules import AnsibleLintRule
+from ansiblelint.rules import AnsibleLintRule, RulesCollection
 
 
 class TestCodeclimateJSONFormatter:
@@ -20,12 +20,14 @@ class TestCodeclimateJSONFormatter:
     rule = AnsibleLintRule()
     matches: list[MatchError] = []
     formatter: CodeclimateJSONFormatter | None = None
+    collection = RulesCollection()
 
     def setup_class(self) -> None:
         """Set up few MatchError objects."""
         self.rule = AnsibleLintRule()
         self.rule.id = "TCF0001"
         self.rule.severity = "VERY_HIGH"
+        self.collection.register(self.rule)
         self.matches = []
         self.matches.append(
             MatchError(
@@ -51,7 +53,7 @@ class TestCodeclimateJSONFormatter:
             display_relative_path=True,
         )
 
-    def test_format_list(self) -> None:
+    def test_json_format_list(self) -> None:
         """Test if the return value is a string."""
         assert isinstance(self.formatter, CodeclimateJSONFormatter)
         assert isinstance(self.formatter.format_result(self.matches), str)
@@ -64,7 +66,7 @@ class TestCodeclimateJSONFormatter:
         # https://github.com/ansible/ansible-navigator/issues/1490
         assert "\n" not in output
 
-    def test_single_match(self) -> None:
+    def test_json_single_match(self) -> None:
         """Test negative case. Only lists are allowed. Otherwise a RuntimeError will be raised."""
         assert isinstance(self.formatter, CodeclimateJSONFormatter)
         with pytest.raises(RuntimeError):

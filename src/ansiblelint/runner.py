@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from fnmatch import fnmatch
 from functools import cache
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Any
 
 from ansible.errors import AnsibleError
@@ -28,21 +29,20 @@ import ansiblelint.utils
 from ansiblelint._internal.rules import (
     BaseRule,
     LoadingFailureRule,
-    RuntimeErrorRule,
-    WarningRule,
 )
 from ansiblelint.app import App, get_app
 from ansiblelint.constants import States
 from ansiblelint.errors import LintWarning, MatchError, WarnSource
 from ansiblelint.file_utils import Lintable, expand_dirs_in_lintables
 from ansiblelint.logger import timed_info
-from ansiblelint.rules.syntax_check import OUTPUT_PATTERNS, AnsibleSyntaxCheckRule
+from ansiblelint.rules.syntax_check import OUTPUT_PATTERNS
 from ansiblelint.text import strip_ansi_escape
 from ansiblelint.utils import (
     PLAYBOOK_DIR,
     _include_children,
     _roles_children,
     _taskshandlers_children,
+    parse_examples_from_plugin,
     template,
 )
 
@@ -176,7 +176,7 @@ class Runner:
                     if isinstance(warn.source, WarnSource):
                         match = MatchError(
                             message=warn.source.message or warn.category.__name__,
-                            rule=WarningRule(),
+                            rule=self.rules["warning"],
                             filename=warn.source.filename.filename,
                             tag=warn.source.tag,
                             lineno=warn.source.lineno,
@@ -187,7 +187,7 @@ class Runner:
                             message=warn.message
                             if isinstance(warn.message, str)
                             else "?",
-                            rule=WarningRule(),
+                            rule=self.rules["warning"],
                             filename=str(filename),
                         )
                     matches.append(match)
@@ -219,7 +219,7 @@ class Runner:
                         lintable=lintable,
                         message=str(lintable.exc),
                         details=str(lintable.exc.__cause__),
-                        rule=LoadingFailureRule(),
+                        rule=self.rules["load-failure"],
                         tag=f"load-failure[{lintable.exc.__class__.__name__.lower()}]",
                     ),
                 )
@@ -230,7 +230,7 @@ class Runner:
                     MatchError(
                         lintable=lintable,
                         message="File or directory not found.",
-                        rule=LoadingFailureRule(),
+                        rule=self.rules["load-failure"],
                         tag="load-failure[not-found]",
                     ),
                 )
@@ -240,7 +240,6 @@ class Runner:
             app = get_app(offline=True)
 
             def worker(lintable: Lintable) -> list[MatchError]:
-                # pylint: disable=protected-access
                 return self._get_ansible_syntax_check_matches(
                     lintable=lintable,
                     app=app,
@@ -304,7 +303,12 @@ class Runner:
         app: App,
     ) -> list[MatchError]:
         """Run ansible syntax check and return a list of MatchError(s)."""
-        default_rule: BaseRule = AnsibleSyntaxCheckRule()
+        try:
+            default_rule: BaseRule = self.rules["syntax-check"]
+        except ValueError:
+            # if syntax-check is not loaded, we do not perform any syntax check,
+            # that might happen during testing
+            return []
         fh = None
         results = []
         if lintable.kind not in ("playbook", "role"):
@@ -368,6 +372,7 @@ class Runner:
             filename = lintable
             lineno = 1
             column = None
+            ignore_rc = False
 
             stderr = strip_ansi_escape(run.stderr)
             stdout = strip_ansi_escape(run.stdout)
@@ -392,20 +397,25 @@ class Runner:
                     else:
                         filename = lintable
                     column = int(groups.get("column", 1))
-                    results.append(
-                        MatchError(
-                            message=title,
-                            lintable=filename,
-                            lineno=lineno,
-                            column=column,
-                            rule=rule,
-                            details=details,
-                            tag=f"{rule.id}[{pattern.tag}]",
-                        ),
-                    )
 
-            if not results:
-                rule = RuntimeErrorRule()
+                    if pattern.tag == "unknown-module" and app.options.nodeps:
+                        ignore_rc = True
+                    else:
+                        results.append(
+                            MatchError(
+                                message=title,
+                                lintable=filename,
+                                lineno=lineno,
+                                column=column,
+                                rule=rule,
+                                details=details,
+                                tag=f"{rule.id}[{pattern.tag}]",
+                            ),
+                        )
+                    break
+
+            if not results and not ignore_rc:
+                rule = self.rules["internal-error"]
                 message = (
                     f"Unexpected error code {run.returncode} from "
                     f"execution of: {' '.join(cmd)}"
@@ -451,7 +461,7 @@ class Runner:
                     exc.rule = LoadingFailureRule()
                     yield exc
                 except AttributeError:
-                    yield MatchError(lintable=lintable, rule=LoadingFailureRule())
+                    yield MatchError(lintable=lintable, rule=self.rules["load-failure"])
                 visited.add(lintable)
 
     def find_children(self, lintable: Lintable) -> list[Lintable]:
@@ -463,6 +473,8 @@ class Runner:
         add_all_plugin_dirs(playbook_dir or ".")
         if lintable.kind == "role":
             playbook_ds = AnsibleMapping({"roles": [{"role": str(lintable.path)}]})
+        elif lintable.kind == "plugin":
+            return self.plugin_children(lintable)
         elif lintable.kind not in ("playbook", "tasks"):
             return []
         else:
@@ -473,7 +485,7 @@ class Runner:
         results = []
         # playbook_ds can be an AnsibleUnicode string, which we consider invalid
         if isinstance(playbook_ds, str):
-            raise MatchError(lintable=lintable, rule=LoadingFailureRule())
+            raise MatchError(lintable=lintable, rule=self.rules["load-failure"])
         for item in ansiblelint.utils.playbook_items(playbook_ds):
             # if lintable.kind not in ["playbook"]:
             for child in self.play_children(
@@ -540,6 +552,32 @@ class Runner:
             )
             return delegate_map[k](str(basedir), k, v, parent_type)
         return []
+
+    def plugin_children(self, lintable: Lintable) -> list[Lintable]:
+        """Collect lintable sections from plugin file."""
+        offset, content = parse_examples_from_plugin(lintable)
+        if not content:
+            # No examples, nothing to see here
+            return []
+        examples = Lintable(
+            name=lintable.name,
+            content=content,
+            kind="yaml",
+            base_kind="text/yaml",
+            parent=lintable,
+        )
+        examples.line_offset = offset
+
+        # pylint: disable=consider-using-with
+        examples.file = NamedTemporaryFile(
+            mode="w+",
+            suffix=f"_{lintable.path.name}.yaml",
+        )
+        examples.file.write(content)
+        examples.file.flush()
+        examples.filename = examples.file.name
+        examples.path = Path(examples.file.name)
+        return [examples]
 
 
 @cache

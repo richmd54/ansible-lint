@@ -22,6 +22,7 @@
 """Generic utility helpers."""
 from __future__ import annotations
 
+import ast
 import contextlib
 import inspect
 import logging
@@ -29,19 +30,21 @@ import os
 import re
 from collections.abc import Generator, ItemsView, Iterator, Mapping, Sequence
 from dataclasses import _MISSING_TYPE, dataclass, field
-from functools import cache
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import Any
 
+import ruamel.yaml.parser
 import yaml
 from ansible.errors import AnsibleError, AnsibleParserError
 from ansible.module_utils.parsing.convert_bool import boolean
 from ansible.parsing.dataloader import DataLoader
 from ansible.parsing.mod_args import ModuleArgsParser
+from ansible.parsing.plugin_docs import read_docstring
 from ansible.parsing.yaml.constructor import AnsibleConstructor, AnsibleMapping
 from ansible.parsing.yaml.loader import AnsibleLoader
 from ansible.parsing.yaml.objects import AnsibleBaseYAMLObject, AnsibleSequence
-from ansible.plugins.loader import add_all_plugin_dirs
+from ansible.plugins.loader import PluginLoadContext, add_all_plugin_dirs, module_loader
 from ansible.template import Templar
 from ansible.utils.collection_loader import AnsibleCollectionConfig
 from yaml.composer import Composer
@@ -186,7 +189,6 @@ def ansible_template(
                     _logger.warning(err)
                     raise
 
-                # pylint: disable=protected-access
                 templar.environment.filters._delegatee[  # noqa: SLF001
                     missing_filter
                 ] = mock_filter
@@ -566,7 +568,6 @@ def normalize_task_v2(task: dict[str, Any]) -> dict[str, Any]:
             skip_action_validation=options.skip_action_validation,
         )
     except AnsibleParserError as exc:
-        # pylint: disable=raise-missing-from
         raise MatchError(
             rule=AnsibleParserErrorRule(),
             message=exc.message,
@@ -702,7 +703,11 @@ class Task(dict[str, Any]):
     @property
     def name(self) -> str | None:
         """Return the name of the task."""
-        return self.raw_task.get("name", None)
+        name = self.raw_task.get("name", None)
+        if name is not None and not isinstance(name, str):
+            msg = "Task name can only be a string."
+            raise RuntimeError(msg)
+        return name
 
     @property
     def action(self) -> str:
@@ -755,7 +760,12 @@ class Task(dict[str, Any]):
 
     def is_handler(self) -> bool:
         """Return true for tasks that are handlers."""
-        return ".handlers[" in self.position
+        is_handler_file = False
+        if isinstance(self._normalized_task, dict):
+            file_name = str(self._normalized_task["action"].get(FILENAME_KEY, None))
+            if file_name:
+                is_handler_file = "handlers" in str(file_name)
+        return is_handler_file if is_handler_file else ".handlers[" in self.position
 
     def __repr__(self) -> str:
         """Return a string representation of the task."""
@@ -878,9 +888,7 @@ def parse_yaml_linenumbers(
         if hasattr(node, "__line__"):
             mapping[LINE_NUMBER_KEY] = node.__line__
         else:
-            mapping[
-                LINE_NUMBER_KEY
-            ] = mapping._line_number  # pylint: disable=protected-access  # noqa: SLF001
+            mapping[LINE_NUMBER_KEY] = mapping._line_number  # noqa: SLF001
         mapping[FILENAME_KEY] = lintable.path
         return mapping
 
@@ -903,8 +911,9 @@ def parse_yaml_linenumbers(
         yaml.parser.ParserError,
         yaml.scanner.ScannerError,
         yaml.constructor.ConstructorError,
+        ruamel.yaml.parser.ParserError,
     ) as exc:
-        msg = "Failed to load YAML file"
+        msg = f"Failed to load YAML file: {lintable.path}"
         raise RuntimeError(msg) from exc
 
     if len(result) == 0:
@@ -983,7 +992,6 @@ def is_playbook(filename: str) -> bool:
     return False
 
 
-# pylint: disable=too-many-statements
 def get_lintables(
     opts: Options = options,
     args: list[str] | None = None,
@@ -1026,3 +1034,43 @@ def _extend_with_roles(lintables: list[Lintable]) -> None:
 def convert_to_boolean(value: Any) -> bool:
     """Use Ansible to convert something to a boolean."""
     return bool(boolean(value))
+
+
+def parse_examples_from_plugin(lintable: Lintable) -> tuple[int, str]:
+    """Parse yaml inside plugin EXAMPLES string.
+
+    Store a line number offset to realign returned line numbers later
+    """
+    offset = 1
+    parsed = ast.parse(lintable.content)
+    for child in parsed.body:
+        if isinstance(child, ast.Assign):
+            label = child.targets[0]
+            if isinstance(label, ast.Name) and label.id == "EXAMPLES":
+                offset = child.lineno - 1
+                break
+
+    docs = read_docstring(str(lintable.path))
+    examples = docs["plainexamples"]
+
+    # Ignore the leading newline and lack of document start
+    # as including those in EXAMPLES would be weird.
+    return offset, (f"---{examples}" if examples else "")
+
+
+@lru_cache
+def load_plugin(name: str) -> PluginLoadContext:
+    """Return loaded ansible plugin/module."""
+    loaded_module = module_loader.find_plugin_with_context(
+        name,
+        ignore_deprecated=True,
+        check_aliases=True,
+    )
+    if not loaded_module.resolved and name.startswith("ansible.builtin."):
+        # fallback to core behavior of using legacy
+        loaded_module = module_loader.find_plugin_with_context(
+            name.replace("ansible.builtin.", "ansible.legacy."),
+            ignore_deprecated=True,
+            check_aliases=True,
+        )
+    return loaded_module
